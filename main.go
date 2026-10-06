@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bytes"
+	"archive/zip"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"image/jpeg"
 	"io"
 	"io/fs"
 	"log"
@@ -17,8 +16,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/icza/mjpeg"
 )
 
 //go:embed static/*
@@ -89,11 +86,35 @@ func main() {
 		w.Write([]byte(`{"status": "success"}`))
 	})
 
-	// API endpoint to compile images into AVI video
+	// API endpoint to compile images into MP4 video
 	http.HandleFunc("/compile", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+
+		// Parse request
+		type CompileReq struct {
+			FPS int32 `json:"fps"`
+		}
+		var req CompileReq
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &req)
+		if req.FPS <= 0 {
+			req.FPS = 10
+		}
+
+		// Ensure ffmpeg is available
+		if _, err := os.Stat("ffmpeg.exe"); os.IsNotExist(err) {
+			if _, errPath := exec.LookPath("ffmpeg"); errPath != nil {
+				// We need to download it
+				fmt.Println("Downloading FFmpeg... Please wait.")
+				if err := downloadAndExtractFFmpeg(); err != nil {
+					http.Error(w, "Failed to download FFmpeg: "+err.Error(), http.StatusInternalServerError)
+					return
+				}
+				fmt.Println("FFmpeg downloaded successfully.")
+			}
 		}
 
 		// Read all JPEGs from captures directory
@@ -115,55 +136,54 @@ func main() {
 			return
 		}
 
-		// Parse request to get framerate
-		type CompileReq struct {
-			FPS int32 `json:"fps"`
-		}
-		var req CompileReq
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &req)
-		if req.FPS <= 0 {
-			req.FPS = 10 // default 10 fps
-		}
-
 		// Output filename
 		videosDir := "videos"
 		os.MkdirAll(videosDir, os.ModePerm)
-		outFilename := filepath.Join(videosDir, fmt.Sprintf("timelapse_%s.avi", time.Now().Format("2006-01-02_15-04-05")))
+		outFilename := filepath.Join(videosDir, fmt.Sprintf("timelapse_%s.mp4", time.Now().Format("2006-01-02_15-04-05")))
 
-		// We need to know width and height. Let's decode the first image.
-		firstImgBytes, err := os.ReadFile(jpgFiles[0])
-		if err != nil {
-			http.Error(w, "Failed to read first image", http.StatusInternalServerError)
-			return
-		}
-		
-		imgConfig, err := jpeg.DecodeConfig(bytes.NewReader(firstImgBytes))
-		if err != nil {
-			http.Error(w, "Failed to get image dimensions", http.StatusInternalServerError)
-			return
+		// Determine ffmpeg path (local or system)
+		ffmpegPath := "ffmpeg"
+		if _, err := os.Stat("ffmpeg.exe"); err == nil {
+			ffmpegPath = "./ffmpeg.exe"
 		}
 
-		aw, err := mjpeg.New(outFilename, int32(imgConfig.Width), int32(imgConfig.Height), req.FPS)
+		// Prepare FFmpeg command
+		cmd := exec.Command(ffmpegPath,
+			"-y",
+			"-f", "image2pipe",
+			"-framerate", fmt.Sprintf("%d", req.FPS),
+			"-i", "pipe:0",
+			"-c:v", "libx264",
+			"-pix_fmt", "yuv420p",
+			outFilename,
+		)
+
+		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to create video: %v", err), http.StatusInternalServerError)
+			http.Error(w, "Failed to create ffmpeg pipe", http.StatusInternalServerError)
 			return
 		}
 
-		// Add all frames
-		for _, file := range jpgFiles {
-			data, err := os.ReadFile(file)
-			if err == nil {
-				aw.AddFrame(data)
+		if err := cmd.Start(); err != nil {
+			http.Error(w, "FFmpeg failed to start", http.StatusInternalServerError)
+			return
+		}
+
+		// Pipe images to FFmpeg
+		go func() {
+			for _, file := range jpgFiles {
+				data, err := os.ReadFile(file)
+				if err == nil {
+					stdin.Write(data)
+				}
 			}
-		}
-		
-		aw.Close()
+			stdin.Close()
+			cmd.Wait()
 
-		// Optional: Clean up images after compile
-		for _, file := range jpgFiles {
-			os.Remove(file)
-		}
+			for _, file := range jpgFiles {
+				os.Remove(file)
+			}
+		}()
 
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(fmt.Sprintf(`{"status": "success", "file": "%s"}`, outFilename)))
@@ -203,4 +223,53 @@ func openBrowser(url string) {
 	if err != nil {
 		log.Printf("Could not open browser automatically, please go to %s manually.\n", url)
 	}
+}
+
+func downloadAndExtractFFmpeg() error {
+	zipUrl := "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+	resp, err := http.Get(zipUrl)
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	out, err := os.Create("ffmpeg_temp.zip")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	io.Copy(out, resp.Body)
+	out.Close()
+
+	defer os.Remove("ffmpeg_temp.zip")
+
+	r, err := zip.OpenReader("ffmpeg_temp.zip")
+	if err != nil {
+		return fmt.Errorf("failed to open zip: %w", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if strings.HasSuffix(f.Name, "ffmpeg.exe") {
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+			
+			exeOut, err := os.Create("ffmpeg.exe")
+			if err != nil {
+				rc.Close()
+				return err
+			}
+			
+			_, err = io.Copy(exeOut, rc)
+			exeOut.Close()
+			rc.Close()
+			
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
 }
