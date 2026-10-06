@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TiLapseCam - Beautiful Moments</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                    <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                <h1>TiLapseCam</h1>
+            </div>
+            <div class="status-badge" id="statusBadge">Idle</div>
+        </header>
+
+        <main>
+            <div class="camera-container">
+                <video id="webcam" autoplay playsinline></video>
+                <div class="glass-overlay">
+                    <div class="overlay-top">
+                        <span id="frameCounter">Frames: 0</span>
+                        <span id="timerDisplay">00:00</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="controls-panel glass-panel">
+                <div class="control-group">
+                    <label for="intervalSelect">Interval</label>
+                    <select id="intervalSelect">
+                        <option value="1">1 Second</option>
+                        <option value="3">3 Seconds</option>
+                        <option value="5" selected>5 Seconds</option>
+                        <option value="10">10 Seconds</option>
+                        <option value="30">30 Seconds</option>
+                        <option value="60">1 Minute</option>
+                    </select>
+                </div>
+
+                <div class="control-actions">
+                    <button id="btnStart" class="btn btn-primary">Start Timelapse</button>
+                    <button id="btnStop" class="btn btn-danger" disabled>Stop</button>
+                    <button id="btnRender" class="btn btn-primary" style="display: none;">Render Video</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Hidden canvas used for capturing frames -->
+        <canvas id="captureCanvas" style="display: none;"></canvas>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
